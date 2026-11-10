@@ -1,0 +1,25 @@
+spring:
+  datasource:
+    url: jdbc:tc:postgresql:15.4://localhost:5432/omniorder
+    username: omniorder
+    password: omniorder
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: false
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: inventory-service-test
+    listener:
+      auto-startup: false
+
+server:
+  port: 8083

@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: identity-service
+
+server:
+  port: 8081
+
+jwt:
+  issuer: identity-service-test
+  public-key-pem: classpath:jwt/test-public-key.pem
+  expiration-seconds: 86400
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

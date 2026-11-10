@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:postgresql://localhost:5432/omniorder
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: false
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.omniorder.*"
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          public-key-location: classpath:jwt/test-public-key.pem
+          issuer-uri: http://localhost:8081
+
+jwt:
+  issuer: identity-service
+  public-key-pem: classpath:jwt/test-public-key.pem
+  expiration-seconds: 86400
+
+server:
+  port: 8082
+
+app:
+  outbox:
+    poll-delay-ms: 1000
+    max-retry: 5
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics

@@ -1,0 +1,23 @@
+# Maven / Java build artifacts
+**/target/
+.m2/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*-private-key.pem
+*.key
+*.p12
+*.pfx
+
+# Local tooling and generated reports
+.DS_Store
+.idea/
+.vscode/
+*.log
+coverage/
+
+# Node build artifacts for optional service tooling
+node_modules/
+dist/

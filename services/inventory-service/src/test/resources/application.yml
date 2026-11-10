@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: inventory-service
+  datasource:
+    url: jdbc:postgresql://localhost:5432/omniorder
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: false
+  kafka:
+    bootstrap-servers: localhost:9092
+
+server:
+  port: 8083
+
+app:
+  inventory:
+    reservation-expiry-poll-ms: 60000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics

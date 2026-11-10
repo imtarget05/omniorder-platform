@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: audit-worker
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/omniorder_audit
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: audit-worker
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.omniorder.*"
+
+server:
+  port: 8085
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

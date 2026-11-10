@@ -1,0 +1,239 @@
+stages:
+  - verify
+  - quality
+  - security
+  - package
+  - image_scan
+  - deploy
+  - validate
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
+  MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version"
+  DOCKER_TLS_CERTDIR: ""
+  REGISTRY_IMAGE: "$CI_REGISTRY_IMAGE"
+
+cache:
+  key: "maven-$CI_COMMIT_REF_SLUG"
+  paths:
+    - .m2/repository/
+
+verify:compile:
+  stage: verify
+  image: maven:3.9.9-eclipse-temurin-21
+  script:
+    - ./mvnw $MAVEN_CLI_OPTS -DskipTests compile
+
+verify:test:
+  stage: verify
+  image: maven:3.9.9-eclipse-temurin-21
+  services:
+    - name: docker:24.0.5-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    TESTCONTAINERS_HOST_OVERRIDE: docker
+    TESTCONTAINERS_RYUK_DISABLED: "true"
+  script:
+    - ./mvnw $MAVEN_CLI_OPTS verify
+  artifacts:
+    when: always
+    paths:
+      - "**/target/surefire-reports/*.xml"
+      - "**/target/site/jacoco/jacoco.xml"
+      - "**/target/jacoco.exec"
+    expire_in: 1 week
+
+quality:sonarqube:
+  stage: quality
+  image: maven:3.9.9-eclipse-temurin-21
+  needs:
+    - job: verify:test
+      artifacts: true
+  script:
+    - ': "${SONAR_HOST_URL:?Set the protected SONAR_HOST_URL CI variable}"'
+    - ': "${SONAR_TOKEN:?Set the masked SONAR_TOKEN CI variable}"'
+    - >-
+      ./mvnw $MAVEN_CLI_OPTS
+      -DskipTests
+      install
+      org.sonarsource.scanner.maven:sonar-maven-plugin:5.5.0.6356:sonar
+      -Dsonar.qualitygate.wait=true
+      -Dsonar.coverage.jacoco.xmlReportPaths=**/target/site/jacoco/jacoco.xml
+
+security:dependency-scan:
+  stage: security
+  image: maven:3.9.9-eclipse-temurin-21
+  script:
+    - >-
+      ./mvnw $MAVEN_CLI_OPTS
+      org.owasp:dependency-check-maven:12.1.0:check
+      -DfailBuildOnCVSS=7
+      -Dformat=JSON
+      -DskipTests
+  artifacts:
+    when: always
+    paths:
+      - dependency-check-report.json
+    expire_in: 1 week
+
+security:secret-scan:
+  stage: security
+  image: zricethezav/gitleaks:v8.30.1
+  script:
+    - gitleaks detect --source . --report-format json --report-path gl-secret-scanning-report.json --exit-code 1
+  artifacts:
+    when: always
+    paths:
+      - gl-secret-scanning-report.json
+    expire_in: 1 week
+
+security:trivy:
+  stage: security
+  image: aquasec/trivy:0.76.2
+  script:
+    - >-
+      trivy fs
+      --scanners vuln,misconfig,secret
+      --severity HIGH,CRITICAL
+      --exit-code 1
+      --format json
+      --output gl-trivy-report.json
+      --skip-dirs .git
+      --skip-dirs target
+      .
+  artifacts:
+    when: always
+    paths:
+      - gl-trivy-report.json
+    expire_in: 1 week
+
+package:image:
+  stage: package
+  image: docker:24.0.5
+  services:
+    - name: docker:24.0.5-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - 'printf "%s" "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"'
+  script:
+    - docker build --tag "$CI_REGISTRY_IMAGE/identity-service:$CI_COMMIT_SHA" --file services/identity-service/Dockerfile .
+    - docker push "$CI_REGISTRY_IMAGE/identity-service:$CI_COMMIT_SHA"
+    - docker build --tag "$CI_REGISTRY_IMAGE/order-service:$CI_COMMIT_SHA" --file services/order-service/Dockerfile .
+    - docker push "$CI_REGISTRY_IMAGE/order-service:$CI_COMMIT_SHA"
+    - docker build --tag "$CI_REGISTRY_IMAGE/inventory-service:$CI_COMMIT_SHA" --file services/inventory-service/Dockerfile .
+    - docker push "$CI_REGISTRY_IMAGE/inventory-service:$CI_COMMIT_SHA"
+  needs:
+    - verify:compile
+    - verify:test
+    - quality:sonarqube
+    - security:dependency-scan
+    - security:secret-scan
+    - security:trivy
+
+security:image-scan:
+  stage: image_scan
+  image: aquasec/trivy:0.76.2
+  variables:
+    TRIVY_USERNAME: "$CI_REGISTRY_USER"
+    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
+    TRIVY_AUTH_URL: "$CI_REGISTRY"
+  needs:
+    - package:image
+  script:
+    - >-
+      trivy image --exit-code 1 --severity HIGH,CRITICAL --format json
+      --output trivy-identity.json
+      "$CI_REGISTRY_IMAGE/identity-service:$CI_COMMIT_SHA"
+    - >-
+      trivy image --exit-code 1 --severity HIGH,CRITICAL --format json
+      --output trivy-order.json
+      "$CI_REGISTRY_IMAGE/order-service:$CI_COMMIT_SHA"
+    - >-
+      trivy image --exit-code 1 --severity HIGH,CRITICAL --format json
+      --output trivy-inventory.json
+      "$CI_REGISTRY_IMAGE/inventory-service:$CI_COMMIT_SHA"
+  artifacts:
+    when: always
+    paths:
+      - trivy-identity.json
+      - trivy-order.json
+      - trivy-inventory.json
+    expire_in: 1 week
+
+deploy:staging:
+  stage: deploy
+  image: alpine:3.22
+  environment:
+    name: staging
+    url: "$STAGING_URL"
+  resource_group: omniorder-staging
+  variables:
+    KUBECTL_VERSION: v1.34.2
+  before_script:
+    - apk add --no-cache ca-certificates curl
+    - curl --fail --silent --show-error --location "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl" --output /usr/local/bin/kubectl
+    - curl --fail --silent --show-error --location "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl.sha256" --output /tmp/kubectl.sha256
+    - echo "$(cat /tmp/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum -c -
+    - chmod +x /usr/local/bin/kubectl
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KUBECONFIG && $STAGING_KUBE_CONTEXT && $STAGING_URL && $STAGING_NAMESPACE && $STAGING_POSTGRES_URL && $STAGING_KAFKA_BOOTSTRAP_SERVERS && $STAGING_IDENTITY_ISSUER_URI'
+      when: manual
+    - when: never
+  needs:
+    - package:image
+    - security:image-scan
+  script:
+    - ': "${KUBECONFIG:?Configure a protected KUBECONFIG file variable}"'
+    - ': "${STAGING_KUBE_CONTEXT:?Configure the staging Kubernetes context}"'
+    - ': "${STAGING_NAMESPACE:?Configure an isolated staging namespace}"'
+    - kubectl config use-context "$STAGING_KUBE_CONTEXT"
+    - kubectl create namespace "$STAGING_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+    - kubectl -n "$STAGING_NAMESPACE" get secret db-secret
+    - kubectl -n "$STAGING_NAMESPACE" get secret jwt-secret
+    - >-
+      kubectl create secret docker-registry gitlab-registry-auth
+      --docker-server="$CI_REGISTRY"
+      --docker-username="$CI_REGISTRY_USER"
+      --docker-password="$CI_REGISTRY_PASSWORD"
+      --namespace="$STAGING_NAMESPACE"
+      --dry-run=client -o yaml
+      | kubectl apply -f -
+    - |
+      set -eu
+      rendered_dir="$(mktemp -d)"
+      trap 'rm -rf "$rendered_dir"' EXIT
+      for manifest in infrastructure/kubernetes/identity-service.yaml infrastructure/kubernetes/order-service.yaml infrastructure/kubernetes/inventory-service.yaml; do
+        output="$rendered_dir/$(basename "$manifest")"
+        sed \
+          -e "s|\${STAGING_NAMESPACE}|$STAGING_NAMESPACE|g" \
+          -e "s|\${STAGING_POSTGRES_URL}|$STAGING_POSTGRES_URL|g" \
+          -e "s|\${STAGING_KAFKA_BOOTSTRAP_SERVERS}|$STAGING_KAFKA_BOOTSTRAP_SERVERS|g" \
+          -e "s|\${STAGING_IDENTITY_ISSUER_URI}|$STAGING_IDENTITY_ISSUER_URI|g" \
+          -e "s|\${CI_REGISTRY_IMAGE}|$CI_REGISTRY_IMAGE|g" \
+          -e "s|\${CI_COMMIT_SHORT_SHA}|$CI_COMMIT_SHA|g" \
+          "$manifest" > "$output"
+      done
+      kubectl apply -f "$rendered_dir"
+    - kubectl -n "$STAGING_NAMESPACE" rollout status deployment/identity-service --timeout=300s
+    - kubectl -n "$STAGING_NAMESPACE" rollout status deployment/order-service --timeout=300s
+    - kubectl -n "$STAGING_NAMESPACE" rollout status deployment/inventory-service --timeout=300s
+
+validate:smoke-test:
+  stage: validate
+  image: curlimages/curl:8.12.1
+  environment:
+    name: staging
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KUBECONFIG && $STAGING_KUBE_CONTEXT && $STAGING_URL && $STAGING_NAMESPACE && $STAGING_POSTGRES_URL && $STAGING_KAFKA_BOOTSTRAP_SERVERS && $STAGING_IDENTITY_ISSUER_URI && $SMOKE_TEST_TOKEN'
+    - when: never
+  needs:
+    - deploy:staging
+  script:
+    - ': "${STAGING_URL:?Configure STAGING_URL for the staging environment}"'
+    - ': "${SMOKE_TEST_TOKEN:?Configure a staging-only SMOKE_TEST_TOKEN}"'
+    - curl --fail --show-error --silent "$STAGING_URL/actuator/health"
+    - curl --fail --show-error --silent --header "Authorization: Bearer $SMOKE_TEST_TOKEN" "$STAGING_URL/api/v1/orders"

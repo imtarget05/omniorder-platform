@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: jdbc:tc:postgresql:15.4://localhost:5432/omniorder?TC_INITSCRIPT=src/main/resources/db/migration/V1__init.sql
+    username: omniorder
+    password: omniorder
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        temp.use_jdbc_metadata_defaults: false

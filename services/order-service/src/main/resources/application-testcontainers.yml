@@ -1,0 +1,32 @@
+spring:
+  datasource:
+    url: jdbc:tc:postgresql:15.4://localhost:5432/omniorder
+    username: omniorder
+    password: omniorder
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: false
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: order-service-test
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.omniorder.*"
+
+server:
+  port: 8082
+
+app:
+  outbox:
+    poll-delay-ms: 100

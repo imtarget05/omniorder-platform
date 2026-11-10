@@ -1,0 +1,114 @@
+services:
+  postgres:
+    image: postgres:15.4
+    environment:
+      POSTGRES_DB: omniorder
+      POSTGRES_USER: ${OMNIORDER_DB_USERNAME:?Set OMNIORDER_DB_USERNAME}
+      POSTGRES_PASSWORD: ${OMNIORDER_DB_PASSWORD:?Set OMNIORDER_DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - omniorder_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omniorder -d omniorder"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - postgres
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_JMX_PORT: 9991
+      KAFKA_JMX_HOSTNAME: localhost
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "nc -z localhost 9092"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  identity-service:
+    build:
+      context: ..
+      dockerfile: services/identity-service/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/omniorder
+      SPRING_DATASOURCE_USERNAME: ${OMNIORDER_DB_USERNAME:?Set OMNIORDER_DB_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${OMNIORDER_DB_PASSWORD:?Set OMNIORDER_DB_PASSWORD}
+      SPRING_FLYWAY_ENABLED: "true"
+      JWT_PRIVATE_KEY_PEM: ${JWT_PRIVATE_KEY_PEM:?Set JWT_PRIVATE_KEY_PEM to a local or secret-managed PKCS#8 key}
+      JWT_PUBLIC_KEY_PEM: ${JWT_PUBLIC_KEY_PEM:?Set JWT_PUBLIC_KEY_PEM to the matching public key}
+      JWT_ISSUER_URI: http://identity-service:8081
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  order-service:
+    build:
+      context: ..
+      dockerfile: services/order-service/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/omniorder
+      SPRING_DATASOURCE_USERNAME: ${OMNIORDER_DB_USERNAME:?Set OMNIORDER_DB_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${OMNIORDER_DB_PASSWORD:?Set OMNIORDER_DB_PASSWORD}
+      SPRING_FLYWAY_ENABLED: "true"
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      JWT_PUBLIC_KEY_PEM: ${JWT_PUBLIC_KEY_PEM:?Set a secret-managed file location}
+      JWT_ISSUER_URI: http://identity-service:8081
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8082/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  inventory-service:
+    build:
+      context: ..
+      dockerfile: services/inventory-service/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/omniorder
+      SPRING_DATASOURCE_USERNAME: ${OMNIORDER_DB_USERNAME:?Set OMNIORDER_DB_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${OMNIORDER_DB_PASSWORD:?Set OMNIORDER_DB_PASSWORD}
+      SPRING_FLYWAY_ENABLED: "true"
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8083/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  omniorder_postgres_data:
